@@ -2,6 +2,28 @@ extends Node
 class_name GameState
 
 enum Phase { PLAYING, PAUSED, LEVEL_COMPLETE, GAME_OVER }
+enum Event { TOGGLE_PAUSE, RESUME, TARGET_REACHED, NO_MOVES_REMAINING, RESTART, NEXT_LEVEL }
+
+const TRANSITIONS := {
+	Phase.PLAYING: {
+		Event.TOGGLE_PAUSE: Phase.PAUSED,
+		Event.TARGET_REACHED: Phase.LEVEL_COMPLETE,
+		Event.NO_MOVES_REMAINING: Phase.GAME_OVER,
+		Event.RESTART: Phase.PLAYING,
+	},
+	Phase.PAUSED: {
+		Event.TOGGLE_PAUSE: Phase.PLAYING,
+		Event.RESUME: Phase.PLAYING,
+		Event.RESTART: Phase.PLAYING,
+	},
+	Phase.LEVEL_COMPLETE: {
+		Event.RESTART: Phase.PLAYING,
+		Event.NEXT_LEVEL: Phase.PLAYING,
+	},
+	Phase.GAME_OVER: {
+		Event.RESTART: Phase.PLAYING,
+	},
+}
 
 signal stats_changed
 signal phase_changed(phase: Phase)
@@ -45,21 +67,17 @@ func evaluate_end_conditions() -> void:
 		return
 
 	if score >= target_score:
-		_set_phase(Phase.LEVEL_COMPLETE)
+		_transition(Event.TARGET_REACHED)
 	elif moves_left <= 0:
-		_set_phase(Phase.GAME_OVER)
+		_transition(Event.NO_MOVES_REMAINING)
 
 
 func toggle_pause() -> void:
-	if phase == Phase.PLAYING:
-		_set_phase(Phase.PAUSED)
-	elif phase == Phase.PAUSED:
-		_set_phase(Phase.PLAYING)
+	_transition(Event.TOGGLE_PAUSE)
 
 
 func resume() -> void:
-	if phase == Phase.PAUSED:
-		_set_phase(Phase.PLAYING)
+	_transition(Event.RESUME)
 
 
 func restart() -> void:
@@ -68,7 +86,7 @@ func restart() -> void:
 	target_score = STARTING_TARGET
 	total_moves = 0
 	level = 1
-	_set_phase(Phase.PLAYING)
+	_transition(Event.RESTART)
 	stats_changed.emit()
 
 
@@ -79,13 +97,19 @@ func start_next_level() -> void:
 	level += 1
 	target_score += TARGET_INCREASE_PER_LEVEL
 	moves_left = STARTING_MOVES
-	_set_phase(Phase.PLAYING)
+	_transition(Event.NEXT_LEVEL)
 	stats_changed.emit()
 
 
-func _set_phase(next_phase: Phase) -> void:
+func _transition(event: Event) -> bool:
+	var phase_transitions: Dictionary = TRANSITIONS.get(phase, {})
+	if not phase_transitions.has(event):
+		return false
+
+	var next_phase: Phase = phase_transitions[event]
 	if phase == next_phase:
-		return
+		return true
 
 	phase = next_phase
 	phase_changed.emit(phase)
+	return true

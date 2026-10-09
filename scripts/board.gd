@@ -5,27 +5,51 @@ const ROWS := 8
 const COLS := 8
 const CANDY_TYPES := 6
 const CANDY_SCENE := preload("res://scenes/candy.tscn")
-const GAME_STATE_SCRIPT := preload("res://scripts/game_state.gd")
+const BOARD_MATCHER_SCRIPT := preload("res://scripts/board_matcher.gd")
+const BOARD_UI_SCRIPT := preload("res://scripts/board_ui.gd")
+
+enum FlowState { IDLE, CANDY_SELECTED, SWAPPING, RESOLVING, SHUFFLING }
+enum FlowEvent { SELECT_CANDY, DESELECT_CANDY, BEGIN_SWAP, INVALID_SWAP, BEGIN_RESOLVE, FINISH_RESOLVE, BEGIN_SHUFFLE, FINISH_SHUFFLE, RESET }
+
+const FLOW_TRANSITIONS := {
+	FlowState.IDLE: {
+		FlowEvent.SELECT_CANDY: FlowState.CANDY_SELECTED,
+		FlowEvent.BEGIN_RESOLVE: FlowState.RESOLVING,
+		FlowEvent.RESET: FlowState.IDLE,
+	},
+	FlowState.CANDY_SELECTED: {
+		FlowEvent.SELECT_CANDY: FlowState.CANDY_SELECTED,
+		FlowEvent.DESELECT_CANDY: FlowState.IDLE,
+		FlowEvent.BEGIN_SWAP: FlowState.SWAPPING,
+		FlowEvent.BEGIN_RESOLVE: FlowState.RESOLVING,
+		FlowEvent.BEGIN_SHUFFLE: FlowState.SHUFFLING,
+		FlowEvent.RESET: FlowState.IDLE,
+	},
+	FlowState.SWAPPING: {
+		FlowEvent.INVALID_SWAP: FlowState.CANDY_SELECTED,
+		FlowEvent.BEGIN_RESOLVE: FlowState.RESOLVING,
+		FlowEvent.RESET: FlowState.IDLE,
+	},
+	FlowState.RESOLVING: {
+		FlowEvent.FINISH_RESOLVE: FlowState.IDLE,
+		FlowEvent.BEGIN_SHUFFLE: FlowState.SHUFFLING,
+		FlowEvent.RESET: FlowState.IDLE,
+	},
+	FlowState.SHUFFLING: {
+		FlowEvent.FINISH_SHUFFLE: FlowState.IDLE,
+		FlowEvent.RESET: FlowState.IDLE,
+	},
+}
 
 var CANDY_COLORS: Array = []
 var SPECIAL_CANDY_COLORS: Dictionary = {}
 var selected_candy: Candy = null
-var is_animating: bool = false
+var flow_state: FlowState = FlowState.IDLE
+var board_matcher: RefCounted = BOARD_MATCHER_SCRIPT.new()
+var board_ui: RefCounted = BOARD_UI_SCRIPT.new()
 
 @onready var game_state: Node = $GameState
 @onready var grid: GridContainer = $GridContainer
-@onready var score_label: Label = $ScoreLabel
-@onready var moves_label: Label = $MovesLabel
-@onready var target_label: Label = $TargetLabel
-@onready var level_label: Label = $LevelLabel
-@onready var pause_button: Button = $PauseButton
-@onready var restart_button: Button = $RestartButton
-@onready var screen_overlay: Control = $ScreenOverlay
-@onready var overlay_title: Label = $ScreenOverlay/Panel/Content/OverlayTitle
-@onready var resume_button: Button = $ScreenOverlay/Panel/Content/ResumeButton
-@onready var next_level_button: Button = $ScreenOverlay/Panel/Content/NextLevelButton
-@onready var overlay_restart_button: Button = $ScreenOverlay/Panel/Content/OverlayRestartButton
-@onready var main_menu_button: Button = $ScreenOverlay/Panel/Content/MainMenuButton
 
 var candies: Array = []
 
@@ -39,17 +63,16 @@ func _ready() -> void:
 		"cross": named_colors["cross"],
 		"rainbow": named_colors["rainbow"],
 	}
-	game_state.stats_changed.connect(_on_game_stats_changed)
-	game_state.phase_changed.connect(_on_game_phase_changed)
+	board_ui.setup(self, game_state)
+	board_ui.pause_requested.connect(toggle_pause)
+	board_ui.restart_requested.connect(restart_game)
+	board_ui.resume_requested.connect(resume_game)
+	board_ui.next_level_requested.connect(start_next_level)
+	board_ui.main_menu_requested.connect(return_to_main_menu)
+	game_state.stats_changed.connect(board_ui.update_stats)
 	build_board()
-	_update_static_ui_text()
-	_on_game_stats_changed()
-	pause_button.pressed.connect(toggle_pause)
-	restart_button.pressed.connect(restart_game)
-	resume_button.pressed.connect(resume_game)
-	next_level_button.pressed.connect(start_next_level)
-	overlay_restart_button.pressed.connect(restart_game)
-	main_menu_button.pressed.connect(return_to_main_menu)
+	board_ui.update_static_text()
+	board_ui.update_stats()
 
 
 func _unhandled_key_input(event: InputEvent) -> void:
@@ -73,7 +96,7 @@ func build_board() -> void:
 				row_candies.append(candy)
 			candies.append(row_candies)
 
-		if has_possible_move():
+		if board_matcher.has_possible_move(candies, ROWS, COLS):
 			return
 
 		for row in candies:
@@ -102,29 +125,8 @@ func get_random_starting_type(row: int, col: int, row_candies: Array) -> int:
 	return candy_type
 
 
-func has_possible_move() -> bool:
-	for row in range(ROWS):
-		for col in range(COLS):
-			if col + 1 < COLS and swap_creates_match(row, col, row, col + 1):
-				return true
-			if row + 1 < ROWS and swap_creates_match(row, col, row + 1, col):
-				return true
-	return false
-
-
-func swap_creates_match(first_row: int, first_col: int, second_row: int, second_col: int) -> bool:
-	var first: Candy = candies[first_row][first_col]
-	var second: Candy = candies[second_row][second_col]
-	candies[first_row][first_col] = second
-	candies[second_row][second_col] = first
-	var creates_match := not find_matches().is_empty()
-	candies[first_row][first_col] = first
-	candies[second_row][second_col] = second
-	return creates_match
-
-
 func _on_candy_clicked(candy: Candy) -> void:
-	if is_animating or not game_state.can_play():
+	if _is_flow_busy() or not game_state.can_play():
 		return
 
 	if candy != null and candy.special_type != "none":
@@ -132,11 +134,13 @@ func _on_candy_clicked(candy: Candy) -> void:
 		return
 
 	if selected_candy == null:
+		_transition_flow(FlowEvent.SELECT_CANDY)
 		selected_candy = candy
 		selected_candy.set_selected(true)
 		return
 
 	if selected_candy == candy:
+		_transition_flow(FlowEvent.DESELECT_CANDY)
 		selected_candy.set_selected(false)
 		selected_candy = null
 		return
@@ -145,6 +149,7 @@ func _on_candy_clicked(candy: Candy) -> void:
 		try_swap(selected_candy, candy)
 		return
 
+	_transition_flow(FlowEvent.SELECT_CANDY)
 	selected_candy.set_selected(false)
 	selected_candy = candy
 	selected_candy.set_selected(true)
@@ -163,33 +168,42 @@ func try_swap(first: Candy, second: Candy) -> void:
 	if not game_state.can_play():
 		return
 
-	is_animating = true
+	if not _transition_flow(FlowEvent.BEGIN_SWAP):
+		return
 	swap_candies(first, second)
 
-	if swap_creates_match_for(first, second):
-		game_state.register_move()
+	if (
+		board_matcher.swap_creates_match_for(candies, first, second, ROWS, COLS)
+		and game_state.register_move()
+	):
 		resolve_matches()
 		return
 
 	swap_candies(first, second)
+	_transition_flow(FlowEvent.INVALID_SWAP)
 	first.set_selected(false)
 	second.set_selected(true)
 	selected_candy = second
-	is_animating = false
-	if find_matches().is_empty() and not has_possible_move():
+	if (
+		board_matcher.find_matches(candies, ROWS, COLS).is_empty()
+		and not board_matcher.has_possible_move(candies, ROWS, COLS)
+	):
 		shuffle_board_until_match_possible()
 
 
 func resolve_matches() -> void:
+	if flow_state != FlowState.RESOLVING and not _transition_flow(FlowEvent.BEGIN_RESOLVE):
+		return
+
 	while true:
-		var matches: Array = find_matches()
+		var matches: Array = board_matcher.find_matches(candies, ROWS, COLS)
 		if matches.is_empty():
-			is_animating = false
+			_transition_flow(FlowEvent.FINISH_RESOLVE)
 			if selected_candy != null:
 				selected_candy.set_selected(false)
 			selected_candy = null
 			game_state.evaluate_end_conditions()
-			if game_state.can_play() and not has_possible_move():
+			if game_state.can_play() and not board_matcher.has_possible_move(candies, ROWS, COLS):
 				shuffle_board_until_match_possible()
 			return
 
@@ -210,13 +224,6 @@ func swap_candies(first: Candy, second: Candy) -> void:
 	first.set_grid_position(second_row, second_col)
 	second.set_grid_position(first_row, first_col)
 	sync_grid_order()
-
-
-func swap_creates_match_for(first: Candy, second: Candy) -> bool:
-	for match_group in find_matches():
-		if match_group.has(first) or match_group.has(second):
-			return true
-	return false
 
 
 func clear_matches(matches: Array) -> void:
@@ -263,7 +270,7 @@ func clear_matches(matches: Array) -> void:
 			continue
 		var match_type := "cross"
 		if candy == special_targets[0]:
-			match_type = "rainbow" if is_line_of_five(candy, matches) else "cross"
+			match_type = "rainbow" if board_matcher.is_line_of_five(candy, matches) else "cross"
 		candy.set_special_type(match_type)
 		candies[candy.row][candy.col] = candy
 
@@ -315,7 +322,8 @@ func sync_grid_order() -> void:
 
 
 func shuffle_board_until_match_possible() -> void:
-	is_animating = true
+	if not _transition_flow(FlowEvent.BEGIN_SHUFFLE):
+		return
 	if selected_candy != null:
 		selected_candy.set_selected(false)
 	selected_candy = null
@@ -334,17 +342,23 @@ func shuffle_board_until_match_possible() -> void:
 				candy.set_grid_position(row, col)
 				index += 1
 
-		if find_matches().is_empty() and has_possible_move():
+		if (
+			board_matcher.find_matches(candies, ROWS, COLS).is_empty()
+			and board_matcher.has_possible_move(candies, ROWS, COLS)
+		):
 			sync_grid_order()
-			is_animating = false
+			_transition_flow(FlowEvent.FINISH_SHUFFLE)
 			return
 
 
 func activate_special_candy(candy: Candy) -> void:
-	if candy == null or not game_state.register_move():
+	if candy == null or _is_flow_busy() or not game_state.can_play():
+		return
+	if not game_state.register_move():
 		return
 
-	is_animating = true
+	if not _transition_flow(FlowEvent.BEGIN_RESOLVE):
+		return
 	if candy.special_type == "cross":
 		clear_row_and_column(candy.row, candy.col)
 	elif candy.special_type == "rainbow":
@@ -388,70 +402,8 @@ func clear_all_of_type(candy_type_value: int) -> void:
 				candy.queue_free()
 
 
-func is_line_of_five(candy: Candy, matches: Array) -> bool:
-	for match in matches:
-		if match.size() >= 5 and match.has(candy):
-			return true
-	return false
-
-
-func update_score_display() -> void:
-	if score_label != null:
-		score_label.text = tr("HUD_SCORE") % game_state.score
-
-
-func update_move_display() -> void:
-	if moves_label != null:
-		moves_label.text = tr("HUD_MOVES") % game_state.moves_left
-
-
-func update_target_display() -> void:
-	if target_label != null:
-		target_label.text = tr("HUD_TARGET") % game_state.target_score
-
-
-func update_level_display() -> void:
-	level_label.text = tr("HUD_LEVEL") % game_state.level
-
-
-func _on_game_stats_changed() -> void:
-	update_score_display()
-	update_move_display()
-	update_target_display()
-	update_level_display()
-
-
-func _update_static_ui_text() -> void:
-	pause_button.text = tr("BUTTON_PAUSE")
-	restart_button.text = tr("BUTTON_RESTART")
-	resume_button.text = tr("BUTTON_RESUME")
-	next_level_button.text = tr("BUTTON_NEXT_LEVEL")
-	overlay_restart_button.text = tr("BUTTON_RESTART")
-	main_menu_button.text = tr("BUTTON_MAIN_MENU")
-
-
-func _on_game_phase_changed(phase: int) -> void:
-	match phase:
-		GAME_STATE_SCRIPT.Phase.PLAYING:
-			screen_overlay.visible = false
-		GAME_STATE_SCRIPT.Phase.PAUSED:
-			show_overlay(tr("STATE_PAUSED"), true, false)
-		GAME_STATE_SCRIPT.Phase.LEVEL_COMPLETE:
-			show_overlay(tr("STATE_LEVEL_COMPLETE") % game_state.level, false, true)
-		GAME_STATE_SCRIPT.Phase.GAME_OVER:
-			show_overlay(tr("STATE_GAME_OVER"), false, false)
-
-
-func show_overlay(title: String, can_resume: bool, can_advance: bool) -> void:
-	overlay_title.text = title
-	resume_button.visible = can_resume
-	next_level_button.visible = can_advance
-	overlay_restart_button.visible = true
-	screen_overlay.visible = true
-
-
 func toggle_pause() -> void:
-	if is_animating:
+	if _is_flow_busy():
 		return
 	game_state.toggle_pause()
 
@@ -465,6 +417,7 @@ func return_to_main_menu() -> void:
 
 
 func restart_game() -> void:
+	_transition_flow(FlowEvent.RESET)
 	for row in candies:
 		for candy in row:
 			if candy != null and is_instance_valid(candy):
@@ -472,12 +425,12 @@ func restart_game() -> void:
 				candy.queue_free()
 	candies.clear()
 	selected_candy = null
-	is_animating = false
 	game_state.restart()
 	build_board()
 
 
 func start_next_level() -> void:
+	_transition_flow(FlowEvent.RESET)
 	for row in candies:
 		for candy in row:
 			if candy != null and is_instance_valid(candy):
@@ -489,53 +442,14 @@ func start_next_level() -> void:
 	build_board()
 
 
-func find_matches() -> Array:
-	var matches: Array = []
+func _transition_flow(event: FlowEvent) -> bool:
+	var state_transitions: Dictionary = FLOW_TRANSITIONS.get(flow_state, {})
+	if not state_transitions.has(event):
+		return false
 
-	for row in range(ROWS):
-		var run: Array = []
-		for col in range(COLS):
-			var candy: Candy = candies[row][col]
-
-			if candy == null:
-				if run.size() >= 3:
-					matches.append(run.duplicate())
-				run.clear()
-				continue
-
-			if run.size() > 0 and run[-1].candy_type == candy.candy_type:
-				run.append(candy)
-			else:
-				if run.size() >= 3:
-					matches.append(run.duplicate())
-				run = [candy]
-
-		if run.size() >= 3:
-			matches.append(run.duplicate())
-
-	for col in range(COLS):
-		var run: Array = []
-		for row in range(ROWS):
-			var candy: Candy = candies[row][col]
-
-			if candy == null:
-				if run.size() >= 3:
-					matches.append(run.duplicate())
-				run.clear()
-				continue
-
-			if run.size() > 0 and run[-1].candy_type == candy.candy_type:
-				run.append(candy)
-			else:
-				if run.size() >= 3:
-					matches.append(run.duplicate())
-				run = [candy]
-
-		if run.size() >= 3:
-			matches.append(run.duplicate())
-
-	return matches
+	flow_state = state_transitions[event]
+	return true
 
 
-func has_match_on_board() -> bool:
-	return find_matches().size() > 0
+func _is_flow_busy() -> bool:
+	return flow_state in [FlowState.SWAPPING, FlowState.RESOLVING, FlowState.SHUFFLING]
