@@ -10,9 +10,12 @@ HUD_TARGET,Target: %d,Цель: %d
 HUD_LEVEL,Level: %d,Уровень: %d
 BUTTON_PAUSE,Pause,Пауза
 BUTTON_RESTART,Restart,Начать заново
+BUTTON_CANCEL,Cancel,Отмена
 BUTTON_RESUME,Resume,Продолжить
 BUTTON_NEXT_LEVEL,Next Level,Следующий уровень
 BUTTON_MAIN_MENU,Main Menu,Главное меню
+CONFIRM_RESTART_TITLE,Restart game,Перезапустить игру
+CONFIRM_RESTART_MESSAGE,Are you sure you want to restart from level 1?,"Вы уверены, что хотите начать заново с 1 уровня?"
 STATE_PAUSED,Paused,Пауза
 STATE_LEVEL_COMPLETE,Level %d Complete,Уровень %d пройден
 STATE_GAME_OVER,Game Over,Игра окончена

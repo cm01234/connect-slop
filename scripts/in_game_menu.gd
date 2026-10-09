@@ -12,16 +12,31 @@ const GAME_STATE_SCRIPT := preload("res://scripts/game_state.gd")
 @onready var next_level_button: Button = $Panel/Content/NextLevelButton
 @onready var restart_button: Button = $Panel/Content/OverlayRestartButton
 @onready var main_menu_button: Button = $Panel/Content/MainMenuButton
+@onready var panel: PanelContainer = $Panel
 
 var game_state: Node
 
 
 func _ready() -> void:
+	resized.connect(_update_panel_layout)
+	for button in [resume_button, next_level_button, restart_button, main_menu_button]:
+		button.custom_minimum_size.y = 48
 	resume_button.pressed.connect(_on_resume_pressed)
 	next_level_button.pressed.connect(_on_next_level_pressed)
 	restart_button.pressed.connect(_on_restart_pressed)
 	main_menu_button.pressed.connect(_on_main_menu_pressed)
 	_update_static_text()
+	_update_panel_layout()
+
+
+func _update_panel_layout() -> void:
+	var panel_width := minf(360.0, maxf(1.0, size.x - 24.0))
+	var available_height := maxf(1.0, size.y - 24.0)
+	var panel_height := minf(maxf(300.0, panel.get_combined_minimum_size().y), available_height)
+	panel.offset_left = -panel_width / 2.0
+	panel.offset_right = panel_width / 2.0
+	panel.offset_top = -panel_height / 2.0
+	panel.offset_bottom = panel_height / 2.0
 
 
 func setup(state: Node) -> void:

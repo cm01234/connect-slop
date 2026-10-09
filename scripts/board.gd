@@ -4,6 +4,11 @@ class_name Board
 const ROWS := 8
 const COLS := 8
 const CANDY_TYPES := 6
+const SWAP_ANIMATION_DURATION := 0.16
+const FALL_ANIMATION_DURATION := 0.2
+const SPAWN_ANIMATION_DURATION := 0.16
+const SHUFFLE_ANIMATION_DURATION := 0.8
+const RANGE_HIGHLIGHT_DURATION := 0.12
 const CANDY_SCENE := preload("res://scenes/candy.tscn")
 const BOARD_MATCHER_SCRIPT := preload("res://scripts/board_matcher.gd")
 const BOARD_UI_SCRIPT := preload("res://scripts/board_ui.gd")
@@ -43,18 +48,25 @@ const FLOW_TRANSITIONS := {
 
 var CANDY_COLORS: Array = []
 var SPECIAL_CANDY_COLORS: Dictionary = {}
+var candy_size: float = 48.0
 var selected_candy: Candy = null
 var flow_state: FlowState = FlowState.IDLE
 var board_matcher: RefCounted = BOARD_MATCHER_SCRIPT.new()
 var board_ui: RefCounted = BOARD_UI_SCRIPT.new()
 
-@onready var game_state: Node = $GameState
-@onready var grid: GridContainer = $GridContainer
+@onready var game_state: Node = get_node_or_null("GameState")
+@onready var stats_grid: GridContainer = $Layout/StatsGrid
+@onready var grid: GridContainer = $Layout/PlayArea/CenterContainer/GridContainer
 
 var candies: Array = []
 
 
 func _ready() -> void:
+	if game_state == null:
+		push_error("Board scene is missing its GameState child node.")
+		return
+	resized.connect(_update_responsive_layout)
+	_update_responsive_layout()
 	var palette: RefCounted = load("res://scripts/color_palette.gd").new()
 	var palette_data: Dictionary = palette.load_palette("res://data/candy_colors.csv")
 	CANDY_COLORS = palette_data["ordered"]
@@ -81,6 +93,24 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 
+func _update_responsive_layout() -> void:
+	if stats_grid == null:
+		return
+
+	var landscape := size.x > size.y
+	stats_grid.columns = 4 if landscape else 2
+	var stats_rows := 1 if landscape else 2
+	var available_width := maxf(1.0, size.x - 16.0)
+	var available_height := maxf(1.0, size.y - 16.0 - (stats_rows * 32.0) - 48.0 - 16.0)
+	var grid_side := minf(available_width, available_height)
+	candy_size = maxf(1.0, floor((grid_side - ((COLS - 1) * 2.0)) / COLS))
+
+	for row in candies:
+		for candy in row:
+			if candy != null and is_instance_valid(candy):
+				candy.set_cell_size(candy_size)
+
+
 func build_board() -> void:
 	grid.columns = COLS
 	while true:
@@ -90,7 +120,9 @@ func build_board() -> void:
 			for col in range(COLS):
 				var candy: Candy = CANDY_SCENE.instantiate()
 				var candy_type := get_random_starting_type(row, col, row_candies)
-				candy.setup(row, col, candy_type, CANDY_COLORS[candy_type], SPECIAL_CANDY_COLORS)
+				candy.setup(
+					row, col, candy_type, CANDY_COLORS[candy_type], SPECIAL_CANDY_COLORS, candy_size
+				)
 				candy.clicked.connect(_on_candy_clicked)
 				grid.add_child(candy)
 				row_candies.append(candy)
@@ -170,16 +202,22 @@ func try_swap(first: Candy, second: Candy) -> void:
 
 	if not _transition_flow(FlowEvent.BEGIN_SWAP):
 		return
-	swap_candies(first, second)
+	await swap_candies(first, second)
 
-	if (
-		board_matcher.swap_creates_match_for(candies, first, second, ROWS, COLS)
-		and game_state.register_move()
-	):
-		resolve_matches()
+	var matches: Array = board_matcher.find_matches(candies, ROWS, COLS)
+	var creates_match_for_swap := false
+	var preferred_special_candy: Candy = null
+	for match_group in matches:
+		if match_group.has(first) or match_group.has(second):
+			creates_match_for_swap = true
+			if match_group.size() >= 4 and preferred_special_candy == null:
+				preferred_special_candy = first if match_group.has(first) else second
+
+	if creates_match_for_swap and game_state.register_move():
+		resolve_matches(preferred_special_candy)
 		return
 
-	swap_candies(first, second)
+	await swap_candies(first, second)
 	_transition_flow(FlowEvent.INVALID_SWAP)
 	first.set_selected(false)
 	second.set_selected(true)
@@ -191,7 +229,7 @@ func try_swap(first: Candy, second: Candy) -> void:
 		shuffle_board_until_match_possible()
 
 
-func resolve_matches() -> void:
+func resolve_matches(preferred_special_candy: Candy = null) -> void:
 	if flow_state != FlowState.RESOLVING and not _transition_flow(FlowEvent.BEGIN_RESOLVE):
 		return
 
@@ -199,7 +237,7 @@ func resolve_matches() -> void:
 		var matches: Array = board_matcher.find_matches(candies, ROWS, COLS)
 		if matches.is_empty():
 			_transition_flow(FlowEvent.FINISH_RESOLVE)
-			if selected_candy != null:
+			if selected_candy != null and is_instance_valid(selected_candy):
 				selected_candy.set_selected(false)
 			selected_candy = null
 			game_state.evaluate_end_conditions()
@@ -207,12 +245,16 @@ func resolve_matches() -> void:
 				shuffle_board_until_match_possible()
 			return
 
-		await clear_matches(matches)
+		var start_positions: Dictionary = await clear_matches(matches, preferred_special_candy)
+		preferred_special_candy = null
 		apply_gravity()
-		refill_board()
+		var new_candies: Array = refill_board()
+		await animate_candy_settle(start_positions, new_candies)
 
 
 func swap_candies(first: Candy, second: Candy) -> void:
+	var first_start_position := first.position
+	var second_start_position := second.position
 	var first_row := first.row
 	var first_col := first.col
 	var second_row := second.row
@@ -224,15 +266,33 @@ func swap_candies(first: Candy, second: Candy) -> void:
 	first.set_grid_position(second_row, second_col)
 	second.set_grid_position(first_row, first_col)
 	sync_grid_order()
+	await get_tree().process_frame
+
+	var first_target_position := first.position
+	var second_target_position := second.position
+
+	var swap_tween := create_tween().set_parallel(true)
+	first.add_grid_offset_tween(
+		swap_tween, first_start_position - first_target_position, SWAP_ANIMATION_DURATION
+	)
+	second.add_grid_offset_tween(
+		swap_tween, second_start_position - second_target_position, SWAP_ANIMATION_DURATION
+	)
+	await swap_tween.finished
 
 
-func clear_matches(matches: Array) -> void:
+func clear_matches(matches: Array, preferred_special_candy: Candy = null) -> Dictionary:
 	var special_targets: Array = []
 	for match in matches:
-		if match.size() >= 5:
-			special_targets.append(match[0])
-		elif match.size() == 4:
-			special_targets.append(match[0])
+		if match.size() >= 4:
+			var target: Candy = match[0]
+			if preferred_special_candy != null and match.has(preferred_special_candy):
+				target = preferred_special_candy
+			if not special_targets.has(target):
+				if target == preferred_special_candy:
+					special_targets.push_front(target)
+				else:
+					special_targets.append(target)
 
 	var to_remove: Array = []
 	for match in matches:
@@ -240,13 +300,15 @@ func clear_matches(matches: Array) -> void:
 			if candy != null and not special_targets.has(candy) and not to_remove.has(candy):
 				to_remove.append(candy)
 
+	var start_positions := _capture_candy_positions(to_remove)
+
 	var total_cleared := to_remove.size() + special_targets.size()
 	var match_bonus: int = 0
 	for match in matches:
 		match_bonus += max(0, match.size() - 2) * 5
 
 	game_state.add_score((total_cleared * 10) + match_bonus)
-	var clear_tweens: Array = []
+	var clear_tween := create_tween().set_parallel(true)
 
 	for candy in special_targets:
 		if candy == null:
@@ -261,9 +323,7 @@ func clear_matches(matches: Array) -> void:
 		var col_index: int = candy.col
 		candies[row_index][col_index] = null
 
-		var tween := create_tween()
-		tween.tween_property(candy, "modulate:a", 0.0, 0.15)
-		clear_tweens.append(tween)
+		candy.add_clear_animation(clear_tween)
 
 	for candy in special_targets:
 		if candy == null:
@@ -274,13 +334,14 @@ func clear_matches(matches: Array) -> void:
 		candy.set_special_type(match_type)
 		candies[candy.row][candy.col] = candy
 
-	for tween in clear_tweens:
-		await tween.finished
+	if not to_remove.is_empty():
+		await clear_tween.finished
 
 	for candy in to_remove:
 		if is_instance_valid(candy):
 			grid.remove_child(candy)
 			candy.queue_free()
+	return start_positions
 
 
 func apply_gravity() -> void:
@@ -300,19 +361,63 @@ func apply_gravity() -> void:
 				candies[row][col] = null
 
 
-func refill_board() -> void:
+func refill_board() -> Array:
+	var new_candies: Array = []
 	for row in range(ROWS):
 		for col in range(COLS):
 			if candies[row][col] == null:
 				var candy: Candy = CANDY_SCENE.instantiate()
 				var candy_type := randi() % CANDY_TYPES
-				candy.setup(row, col, candy_type, CANDY_COLORS[candy_type], SPECIAL_CANDY_COLORS)
+				candy.setup(
+					row, col, candy_type, CANDY_COLORS[candy_type], SPECIAL_CANDY_COLORS, candy_size
+				)
 				candy.clicked.connect(_on_candy_clicked)
 				grid.add_child(candy)
 				candies[row][col] = candy
 				candy.set_selected(false)
+				new_candies.append(candy)
 
 	sync_grid_order()
+	return new_candies
+
+
+func _capture_candy_positions(excluded: Array = []) -> Dictionary:
+	var positions: Dictionary = {}
+	for row in candies:
+		for candy in row:
+			if candy != null and not excluded.has(candy):
+				positions[candy] = candy.position
+	return positions
+
+
+func animate_candy_settle(
+	start_positions: Dictionary,
+	new_candies: Array,
+	fall_duration: float = FALL_ANIMATION_DURATION
+) -> void:
+	await get_tree().process_frame
+	var settle_tween := create_tween().set_parallel(true)
+	var has_animations := false
+
+	for candy in start_positions:
+		if not is_instance_valid(candy):
+			continue
+		var target_position: Vector2 = candy.position
+		var start_position: Vector2 = start_positions[candy]
+		var offset := start_position - target_position
+		if offset.is_zero_approx():
+			continue
+		candy.add_grid_offset_tween(settle_tween, offset, fall_duration)
+		has_animations = true
+
+	for candy in new_candies:
+		if not is_instance_valid(candy):
+			continue
+		candy.add_spawn_animation(settle_tween, SPAWN_ANIMATION_DURATION)
+		has_animations = true
+
+	if has_animations:
+		await settle_tween.finished
 
 
 func sync_grid_order() -> void:
@@ -327,6 +432,8 @@ func shuffle_board_until_match_possible() -> void:
 	if selected_candy != null:
 		selected_candy.set_selected(false)
 	selected_candy = null
+	await get_tree().process_frame
+	var start_positions := _capture_candy_positions()
 
 	var shuffled_candies: Array = []
 	for row in candies:
@@ -347,8 +454,32 @@ func shuffle_board_until_match_possible() -> void:
 			and board_matcher.has_possible_move(candies, ROWS, COLS)
 		):
 			sync_grid_order()
+			await animate_candy_shuffle(start_positions)
 			_transition_flow(FlowEvent.FINISH_SHUFFLE)
 			return
+
+
+func animate_candy_shuffle(start_positions: Dictionary) -> void:
+	await get_tree().process_frame
+	var shuffle_tween := create_tween().set_parallel(true)
+	var has_animations := false
+
+	for candy in start_positions:
+		if not is_instance_valid(candy):
+			continue
+		var target_position: Vector2 = candy.position
+		var start_position: Vector2 = start_positions[candy]
+		var offset := start_position - target_position
+		if not offset.is_zero_approx():
+			candy.add_grid_offset_tween(shuffle_tween, offset, SHUFFLE_ANIMATION_DURATION)
+		var rotation_direction := 1.0 if (candy.row + candy.col) % 2 == 0 else -1.0
+		candy.add_shuffle_rotation_tween(
+			shuffle_tween, SHUFFLE_ANIMATION_DURATION, rotation_direction
+		)
+		has_animations = true
+
+	if has_animations:
+		await shuffle_tween.finished
 
 
 func activate_special_candy(candy: Candy) -> void:
@@ -359,21 +490,72 @@ func activate_special_candy(candy: Candy) -> void:
 
 	if not _transition_flow(FlowEvent.BEGIN_RESOLVE):
 		return
+	if selected_candy != null and is_instance_valid(selected_candy):
+		selected_candy.set_selected(false)
+	selected_candy = null
+
+	var start_positions := _capture_candy_positions()
+	var affected_candies := get_special_candy_range(candy)
+	await animate_special_range(affected_candies, SPECIAL_CANDY_COLORS[candy.special_type])
+
 	if candy.special_type == "cross":
 		clear_row_and_column(candy.row, candy.col)
 	elif candy.special_type == "rainbow":
 		clear_all_of_type(candy.candy_type)
 
-	if selected_candy == candy:
-		selected_candy = null
-
 	candies[candy.row][candy.col] = null
+	grid.remove_child(candy)
 	candy.queue_free()
 	game_state.add_score(50)
 
 	apply_gravity()
-	refill_board()
+	var new_candies: Array = refill_board()
+	await animate_candy_settle(start_positions, new_candies)
 	resolve_matches()
+
+
+func get_special_candy_range(candy: Candy) -> Array:
+	var affected_candies: Array = []
+	if candy.special_type == "cross":
+		for col in range(COLS):
+			var row_candy: Candy = candies[candy.row][col]
+			if row_candy != null:
+				affected_candies.append(row_candy)
+		for row in range(ROWS):
+			var column_candy: Candy = candies[row][candy.col]
+			if column_candy != null and not affected_candies.has(column_candy):
+				affected_candies.append(column_candy)
+	elif candy.special_type == "rainbow":
+		for row in range(ROWS):
+			for col in range(COLS):
+				var target: Candy = candies[row][col]
+				if target != null and target.candy_type == candy.candy_type:
+					affected_candies.append(target)
+	return affected_candies
+
+
+func animate_special_range(affected_candies: Array, highlight_color: Color) -> void:
+	if affected_candies.is_empty():
+		return
+
+	var original_colors: Dictionary = {}
+	var highlight_tween := create_tween().set_parallel(true)
+	for target in affected_candies:
+		if not is_instance_valid(target):
+			continue
+		original_colors[target] = target.get_visual_color()
+		target.add_range_highlight_tween(
+			highlight_tween, highlight_color, RANGE_HIGHLIGHT_DURATION
+		)
+	await highlight_tween.finished
+
+	var restore_tween := create_tween().set_parallel(true)
+	for target in original_colors:
+		if is_instance_valid(target):
+			target.add_visual_color_tween(
+				restore_tween, original_colors[target], RANGE_HIGHLIGHT_DURATION
+			)
+	await restore_tween.finished
 
 
 func clear_row_and_column(row_index: int, col_index: int) -> void:
@@ -440,6 +622,7 @@ func start_next_level() -> void:
 	selected_candy = null
 	game_state.start_next_level()
 	build_board()
+	await shuffle_board_until_match_possible()
 
 
 func _transition_flow(event: FlowEvent) -> bool:

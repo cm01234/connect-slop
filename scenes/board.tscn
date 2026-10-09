@@ -6,15 +6,9 @@
 
 [node name="Board" type="Control"]
 layout_mode = 3
-anchors_preset = 8
-anchor_left = 0.5
-anchor_top = 0.5
-anchor_right = 0.5
-anchor_bottom = 0.5
-offset_left = -250.0
-offset_top = -250.0
-offset_right = 250.0
-offset_bottom = 250.0
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("1_0x8u1")
@@ -22,63 +16,92 @@ script = ExtResource("1_0x8u1")
 [node name="GameState" type="Node" parent="."]
 script = ExtResource("2_state")
 
-[node name="GridContainer" type="GridContainer" parent="."]
+[node name="Layout" type="VBoxContainer" parent="."]
 layout_mode = 1
-anchor_preset = 15
+anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 offset_left = 8.0
-offset_top = 78.0
+offset_top = 8.0
 offset_right = -8.0
 offset_bottom = -8.0
 grow_horizontal = 2
 grow_vertical = 2
-columns = 8
+theme_override_constants/separation = 8
 
-[node name="ScoreLabel" type="Label" parent="."]
-layout_mode = 0
-offset_left = 8.0
-offset_top = 8.0
-offset_right = 120.0
-offset_bottom = 32.0
+[node name="StatsGrid" type="GridContainer" parent="Layout"]
+custom_minimum_size = Vector2(0, 32)
+layout_mode = 2
+columns = 2
+theme_override_constants/h_separation = 8
+theme_override_constants/v_separation = 4
+
+[node name="ScoreLabel" type="Label" parent="Layout/StatsGrid"]
+custom_minimum_size = Vector2(0, 32)
+layout_mode = 2
+size_flags_horizontal = 3
+horizontal_alignment = 1
+vertical_alignment = 1
 text = "Score: 0"
 
-[node name="MovesLabel" type="Label" parent="."]
-layout_mode = 0
-offset_left = 128.0
-offset_top = 8.0
-offset_right = 240.0
-offset_bottom = 32.0
+[node name="MovesLabel" type="Label" parent="Layout/StatsGrid"]
+custom_minimum_size = Vector2(0, 32)
+layout_mode = 2
+size_flags_horizontal = 3
+horizontal_alignment = 1
+vertical_alignment = 1
 text = "Moves: 30"
 
-[node name="TargetLabel" type="Label" parent="."]
-layout_mode = 0
-offset_left = 250.0
-offset_top = 8.0
-offset_right = 375.0
-offset_bottom = 32.0
+[node name="TargetLabel" type="Label" parent="Layout/StatsGrid"]
+custom_minimum_size = Vector2(0, 32)
+layout_mode = 2
+size_flags_horizontal = 3
+horizontal_alignment = 1
+vertical_alignment = 1
 text = "Target: 1000"
 
-[node name="LevelLabel" type="Label" parent="."]
-offset_left = 385.0
-offset_top = 8.0
-offset_right = 490.0
-offset_bottom = 32.0
+[node name="LevelLabel" type="Label" parent="Layout/StatsGrid"]
+custom_minimum_size = Vector2(0, 32)
+layout_mode = 2
+size_flags_horizontal = 3
+horizontal_alignment = 1
+vertical_alignment = 1
 text = "Level: 1"
 
-[node name="PauseButton" type="Button" parent="."]
-offset_left = 8.0
-offset_top = 40.0
-offset_right = 104.0
-offset_bottom = 70.0
+[node name="Actions" type="HBoxContainer" parent="Layout"]
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="PauseButton" type="Button" parent="Layout/Actions"]
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 2
+size_flags_horizontal = 3
 text = "Pause"
 
-[node name="RestartButton" type="Button" parent="."]
-offset_left = 112.0
-offset_top = 40.0
-offset_right = 208.0
-offset_bottom = 70.0
+[node name="RestartButton" type="Button" parent="Layout/Actions"]
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 2
+size_flags_horizontal = 3
 text = "Restart"
+
+[node name="PlayArea" type="Control" parent="Layout"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="CenterContainer" type="CenterContainer" parent="Layout/PlayArea"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="GridContainer" type="GridContainer" parent="Layout/PlayArea/CenterContainer"]
+layout_mode = 2
+columns = 8
+theme_override_constants/h_separation = 2
+theme_override_constants/v_separation = 2
 
 [node name="InGameMenu" parent="." instance=ExtResource("3_menu")]
 layout_mode = 1

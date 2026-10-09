@@ -16,19 +16,29 @@ var target_label: Label
 var level_label: Label
 var pause_button: Button
 var restart_button: Button
+var restart_confirmation: ConfirmationDialog
 
 
 func setup(root: Control, state: Node) -> void:
 	board_root = root
 	game_state = state
-	score_label = root.get_node("ScoreLabel")
-	moves_label = root.get_node("MovesLabel")
-	target_label = root.get_node("TargetLabel")
-	level_label = root.get_node("LevelLabel")
-	pause_button = root.get_node("PauseButton")
-	restart_button = root.get_node("RestartButton")
+	score_label = root.get_node("Layout/StatsGrid/ScoreLabel")
+	moves_label = root.get_node("Layout/StatsGrid/MovesLabel")
+	target_label = root.get_node("Layout/StatsGrid/TargetLabel")
+	level_label = root.get_node("Layout/StatsGrid/LevelLabel")
+	pause_button = root.get_node("Layout/Actions/PauseButton")
+	restart_button = root.get_node("Layout/Actions/RestartButton")
 	in_game_menu = root.get_node("InGameMenu")
 	in_game_menu.setup(state)
+	restart_confirmation = ConfirmationDialog.new()
+	restart_confirmation.title = board_root.tr("CONFIRM_RESTART_TITLE")
+	restart_confirmation.dialog_text = board_root.tr("CONFIRM_RESTART_MESSAGE")
+	restart_confirmation.get_ok_button().text = board_root.tr("BUTTON_RESTART")
+	restart_confirmation.get_cancel_button().text = board_root.tr("BUTTON_CANCEL")
+	restart_confirmation.get_ok_button().custom_minimum_size.y = 48
+	restart_confirmation.get_cancel_button().custom_minimum_size.y = 48
+	restart_confirmation.confirmed.connect(_on_restart_confirmed)
+	root.add_child(restart_confirmation)
 
 	pause_button.pressed.connect(_on_pause_pressed)
 	restart_button.pressed.connect(_on_restart_pressed)
@@ -55,6 +65,10 @@ func _on_pause_pressed() -> void:
 
 
 func _on_restart_pressed() -> void:
+	restart_confirmation.popup_centered()
+
+
+func _on_restart_confirmed() -> void:
 	restart_requested.emit()
 
 
