@@ -1,0 +1,18 @@
+keys,en,ru
+GAME_TITLE,Connect Three,Соедини три
+MENU_TAGLINE,Match / Clear / Cascade,Соединяй / Удаляй / Комбо
+MENU_START,Start Game,Начать игру
+MENU_EXIT,Exit,Выход
+MENU_LANGUAGE,Language,Язык
+HUD_SCORE,Score: %d,Счёт: %d
+HUD_MOVES,Moves: %d,Ходы: %d
+HUD_TARGET,Target: %d,Цель: %d
+HUD_LEVEL,Level: %d,Уровень: %d
+BUTTON_PAUSE,Pause,Пауза
+BUTTON_RESTART,Restart,Начать заново
+BUTTON_RESUME,Resume,Продолжить
+BUTTON_NEXT_LEVEL,Next Level,Следующий уровень
+BUTTON_MAIN_MENU,Main Menu,Главное меню
+STATE_PAUSED,Paused,Пауза
+STATE_LEVEL_COMPLETE,Level %d Complete,Уровень %d пройден
+STATE_GAME_OVER,Game Over,Игра окончена

@@ -1,0 +1,9 @@
+.godot/
+.export/
+.vscode/
+android/.gradle/
+android/build/
+export.cfg
+todo.md
+.DS_Store
+Thumbs.db
